@@ -11,7 +11,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# Custom CSS
+# Custom CSS for branding
 st.markdown(
     """
     <style>
@@ -24,17 +24,22 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-DB_PATH = 'cnpj.db'
+# Allow user to specify the DB path (for large local files)
+db_path = st.sidebar.text_input("Caminho para o arquivo SQLite DB", value="cnpj.db")
+DB_PATH = db_path
 
-# DB helpers
+# Database helpers
 def get_db_connection(path=DB_PATH):
     return sqlite3.connect(path, check_same_thread=False)
 
 def get_available_tables(path=DB_PATH):
-    conn = get_db_connection(path)
-    tables = [row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table';")]
-    conn.close()
-    return tables
+    try:
+        conn = get_db_connection(path)
+        tables = [row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table';")]
+        conn.close()
+        return tables
+    except Exception:
+        return []
 
 def get_table_columns(table, path=DB_PATH):
     conn = get_db_connection(path)
@@ -42,21 +47,21 @@ def get_table_columns(table, path=DB_PATH):
     conn.close()
     return cols
 
-# Main
-
+# Main application
 def main():
     st.title("📊 Sistema de Análise Comex - Indovinya")
     st.sidebar.title("Menu")
     pages = ["Visão Geral do Banco", "Busca por CNPJ", "Análise de Importações", "Dashboard", "Consulta Personalizada", "Exportação de Dados"]
     choice = st.sidebar.radio("Selecione uma opção:", pages)
 
+    # Load available tables once
+    tables = get_available_tables()
+
     if choice == "Visão Geral do Banco":
         show_db_overview()
     else:
-        # If other pages but no DB, prompt upload
-        tables = get_available_tables()
         if not tables:
-            st.error("Nenhuma tabela encontrada. Faça upload do arquivo cnpj.db na Visão Geral do Banco.")
+            st.error("Nenhuma tabela encontrada. Verifique se o caminho está correto e se o arquivo existe.")
             return
         if choice == "Busca por CNPJ":
             show_cnpj_search()
@@ -73,16 +78,10 @@ def main():
 
 def show_db_overview():
     st.header("🗄️ Visão Geral do Banco de Dados")
-    st.write("Arquivo:", os.path.abspath(DB_PATH))
+    st.write("Arquivo atual de DB:", os.path.abspath(DB_PATH))
     tables = get_available_tables()
     if not tables:
-        st.error("Nenhuma tabela encontrada em cnpj.db.")
-        uploaded = st.file_uploader("Faça upload do arquivo SQLite (.db)", type=['db'])
-        if uploaded:
-            bytes_data = uploaded.read()
-            with open(DB_PATH, 'wb') as f:
-                f.write(bytes_data)
-            st.success("Arquivo carregado! Recarregue a página para atualizar.")
+        st.error("Nenhuma tabela encontrada em '" + DB_PATH + "'.")
         return
     st.write(f"Tabelas disponíveis ({len(tables)}):", tables)
     for tbl in tables:
@@ -125,12 +124,14 @@ def show_import_analysis():
     conn = get_db_connection()
     anos = pd.read_sql_query("SELECT DISTINCT CO_ANO FROM Importacao;", conn)['CO_ANO']
     ufs = pd.read_sql_query("SELECT DISTINCT SG_UF FROM Importacao;", conn)['SG_UF']
+    conn.close()
     ano = st.selectbox("Ano", sorted(anos))
     uf = st.selectbox("UF", sorted(ufs))
     cols = get_table_columns('Importacao')
     default = [c for c in ['VL_FOB','KG_LIQUIDO','QT_ESTAT'] if c in cols]
     sel = st.multiselect("Colunas", cols, default=default)
     if sel:
+        conn = get_db_connection()
         df = pd.read_sql_query(
             f"SELECT CO_MES, {', '.join(sel)} FROM Importacao WHERE CO_ANO=? AND SG_UF=?;", conn,
             params=(ano, uf)
@@ -152,9 +153,11 @@ def show_dashboard():
         return
     conn = get_db_connection()
     cols = get_table_columns('Importacao')
+    conn.close()
     default = [c for c in ['VL_FOB','KG_LIQUIDO'] if c in cols]
     sel = st.multiselect("Colunas", cols, default=default)
     if sel:
+        conn = get_db_connection()
         sum_expr = ", ".join([f"SUM({c}) as {c}" for c in sel])
         df_e = pd.read_sql_query(f"SELECT SG_UF, {sum_expr} FROM Importacao GROUP BY SG_UF ORDER BY {sel[0]} DESC LIMIT 5;", conn)
         df_m = pd.read_sql_query(f"SELECT CO_MES, {sum_expr} FROM Importacao GROUP BY CO_MES ORDER BY CO_MES;", conn)
