@@ -24,8 +24,8 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-# Allow user to specify the DB path (for large local files)
-db_path = st.sidebar.text_input("Caminho para o arquivo SQLite DB", value="cnpj.db")
+# Sidebar input for DB path (when running locally)
+db_path = st.sidebar.text_input("Caminho para o arquivo SQLite DB (se aplicável)", value="cnpj.db")
 DB_PATH = db_path
 
 # Database helpers
@@ -53,40 +53,53 @@ def main():
     st.sidebar.title("Menu")
     pages = ["Visão Geral do Banco", "Busca por CNPJ", "Análise de Importações", "Dashboard", "Consulta Personalizada", "Exportação de Dados"]
     choice = st.sidebar.radio("Selecione uma opção:", pages)
-
-    # Load available tables once
+    
+    # For non-overview pages, ensure DB loaded
     tables = get_available_tables()
+    if choice != "Visão Geral do Banco" and not tables:
+        st.error("Nenhuma tabela encontrada. Carregue o banco na visão geral, via upload em múltiplos arquivos se necessário.")
+        return
 
     if choice == "Visão Geral do Banco":
         show_db_overview()
+    elif choice == "Busca por CNPJ":
+        show_cnpj_search()
+    elif choice == "Análise de Importações":
+        show_import_analysis()
+    elif choice == "Dashboard":
+        show_dashboard()
+    elif choice == "Consulta Personalizada":
+        show_custom_query()
     else:
-        if not tables:
-            st.error("Nenhuma tabela encontrada. Verifique se o caminho está correto e se o arquivo existe.")
-            return
-        if choice == "Busca por CNPJ":
-            show_cnpj_search()
-        elif choice == "Análise de Importações":
-            show_import_analysis()
-        elif choice == "Dashboard":
-            show_dashboard()
-        elif choice == "Consulta Personalizada":
-            show_custom_query()
-        elif choice == "Exportação de Dados":
-            show_export()
+        show_export()
 
-# 1. DB Overview
+# 1. DB Overview with multi-file uploader
 
 def show_db_overview():
     st.header("🗄️ Visão Geral do Banco de Dados")
     st.write("Arquivo atual de DB:", os.path.abspath(DB_PATH))
     tables = get_available_tables()
-    if not tables:
-        st.error("Nenhuma tabela encontrada em '" + DB_PATH + "'.")
-        return
-    st.write(f"Tabelas disponíveis ({len(tables)}):", tables)
-    for tbl in tables:
-        with st.expander(f"Colunas de {tbl}"):
-            st.write(get_table_columns(tbl))
+    if tables:
+        st.success(f"Tabelas disponíveis ({len(tables)}):")
+        st.write(tables)
+        for tbl in tables:
+            with st.expander(f"Colunas de {tbl}"):
+                st.write(get_table_columns(tbl))
+    else:
+        st.info("Nenhuma tabela encontrada em '" + DB_PATH + "'.")
+        uploaded = st.file_uploader(
+            "Envie o banco SQLite em múltiplos arquivos (chunk_*.db)",
+            type=['db'], accept_multiple_files=True
+        )
+        if uploaded:
+            # Sort by file name to reconstruct order
+            uploaded_sorted = sorted(uploaded, key=lambda x: x.name)
+            # Write first chunk
+            with open(DB_PATH, 'wb') as f:
+                for idx, file in enumerate(uploaded_sorted):
+                    data = file.read()
+                    f.write(data)
+            st.success("Banco reconstruído com sucesso! Recarregue a página para visualizar tabelas.")
 
 # 2. Busca por CNPJ
 
