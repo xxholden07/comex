@@ -4,6 +4,12 @@ import pandas as pd
 import plotly.express as px
 import os
 
+# To handle large database file with Git LFS:
+# 1. Install Git LFS: https://git-lfs.github.com/ and run `git lfs install`
+# 2. Track the DB file: `git lfs track "cnpj.db"`
+# 3. Commit the .gitattributes file and the DB: `git add .gitattributes cnpj.db && git commit -m "Track cnpj.db with Git LFS"`
+# 4. Push to remote: `git push` (the LFS file will be uploaded separately)
+
 # Page config must be first
 st.set_page_config(
     page_title="Indovinya Comex Dashboard",
