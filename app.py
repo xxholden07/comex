@@ -10,9 +10,41 @@ import os
 
 # Page config must be the first Streamlit command
 st.set_page_config(
-    page_title="Sistema Comex",
-    page_icon="📊",
+    page_title="Indovinya Comex Dashboard",
+    page_icon="🌐",
     layout="wide"
+)
+
+# Custom CSS for Indovinya identity
+st.markdown(
+    """
+    <style>
+    /* Background color */
+    .reportview-container, .main {
+        background-color: #f8f9fa;
+    }
+    /* Sidebar styling */
+    .sidebar .sidebar-content {
+        background-image: linear-gradient(180deg, #004990 0%, #61be64 100%);
+        color: white;
+    }
+    /* Header title color */
+    .css-12oz5g7 h1 {
+        color: #004990;
+    }
+    /* Buttons styling */
+    .stButton>button {
+        background-color: #61be64;
+        color: white;
+        border: none;
+        padding: 0.5em 1em;
+        border-radius: 0.25em;
+    }
+    /* Hide Streamlit default menu */
+    #MainMenu {visibility: hidden;} 
+    footer {visibility: hidden;}
+    """,
+    unsafe_allow_html=True
 )
 
 # Database connection with thread safety
@@ -62,7 +94,7 @@ def main():
     st.write("Diretório atual:", os.getcwd())
     st.write("Arquivos aqui:", os.listdir())
 
-    st.title("📊 Sistema de Análise Comex")
+    st.title("📊 Sistema de Análise Comex - Indovinya")
     
     # Sidebar
     st.sidebar.title("Menu")
@@ -124,8 +156,6 @@ def show_cnpj_search():
 def show_import_analysis():
     st.header("📈 Análise de Importações")
     conn = get_db_connection()
-    # Show available tables for debug
-    # st.write("Tabelas disponíveis:", get_available_tables())
     col1, col2 = st.columns(2)
     with col1:
         anos = pd.read_sql_query("SELECT DISTINCT CO_ANO FROM Importacao", conn)
@@ -134,10 +164,12 @@ def show_import_analysis():
         ufs = pd.read_sql_query("SELECT DISTINCT SG_UF FROM Importacao", conn)
         uf = st.selectbox("Selecione a UF:", sorted(ufs['SG_UF'].tolist()))
     available_columns = get_table_columns('Importacao')
+    # Ensure default columns exist
+    default_cols = [c for c in ['VL_FOB', 'KG_LIQUIDO', 'QT_ESTAT'] if c in available_columns]
     selected_columns = st.multiselect(
         "Selecione as colunas para análise:",
         available_columns,
-        default=['VL_FOB', 'KG_LIQUIDO', 'QT_ESTAT']
+        default=default_cols
     )
     if selected_columns:
         cols_str = ", ".join(selected_columns)
@@ -171,10 +203,12 @@ def show_dashboard():
     st.header("📊 Dashboard Geral")
     conn = get_db_connection()
     available_columns = get_table_columns('Importacao')
+    # Ensure default columns exist
+    default_dash = [c for c in ['VL_FOB', 'KG_LIQUIDO'] if c in available_columns]
     selected_columns = st.multiselect(
         "Selecione as colunas para análise:",
         available_columns,
-        default=['VL_FOB', 'KG_LIQUIDO']
+        default=default_dash
     )
     if selected_columns:
         cols_sum = ", ".join([f"SUM({col}) as {col}" for col in selected_columns])
@@ -193,7 +227,6 @@ def show_dashboard():
                 labels={'SG_UF': 'Estado', col: col}
             )
             st.plotly_chart(fig_e, use_container_width=True)
-        cols_mes = cols_sum
         query_mes = (
             f"SELECT CO_MES, {cols_sum} "
             "FROM Importacao GROUP BY CO_MES ORDER BY CO_MES"
@@ -209,7 +242,6 @@ def show_dashboard():
                 labels={'CO_MES': 'Mês', col: col}
             )
             st.plotly_chart(fig_m, use_container_width=True)
-        # Downloads
         st.download_button("📥 Download Top 5 Estados", download_csv(df_est), file_name="top5_estados.csv")
         st.download_button("📥 Download Distribuição Mensal", download_csv(df_mes), file_name="distribuicao_mensal.csv")
 
@@ -235,7 +267,8 @@ def show_export():
     selected_table = st.selectbox("Selecione a tabela:", tables)
     if selected_table:
         columns = get_table_columns(selected_table)
-        selected_columns = st.multiselect("Selecione as colunas:", columns, default=columns[:5])
+        default_exp = columns[:5] if len(columns) >= 5 else columns
+        selected_columns = st.multiselect("Selecione as colunas:", columns, default=default_exp)
         if selected_columns:
             cols_str = ", ".join(selected_columns)
             query = f"SELECT {cols_str} FROM {selected_table}"
