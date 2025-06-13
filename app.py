@@ -4,212 +4,183 @@ import pandas as pd
 import plotly.express as px
 import os
 
-# Page config must be first
+# Page config
 st.set_page_config(
     page_title="Indovinya Comex Dashboard",
     page_icon="🌐",
     layout="wide"
 )
 
-# Custom CSS for branding
+# Branding CSS
 st.markdown(
     """
     <style>
     .reportview-container, .main { background-color: #f8f9fa; }
     .sidebar .sidebar-content { background-image: linear-gradient(180deg, #004990 0%, #61be64 100%); color: white; }
-    .css-12oz5g7 h1 { color: #004990; }
     .stButton>button { background-color: #61be64; color: white; border-radius: .25em; }
     #MainMenu, footer { visibility: hidden; }
     """,
     unsafe_allow_html=True
 )
 
-# Sidebar for DB path
+# Configure DB path
 DB_PATH = st.sidebar.text_input("Caminho para o SQLite DB", value="cnpj.db")
+IMPORT_TABLE = 'IMPORTACOES_TEST_FULL_202506131448'
+ENRICH_TABLE = 'Consulta_enriquecida'
 
-# Database helpers
-def get_db_connection(path=DB_PATH):
-    return sqlite3.connect(path, check_same_thread=False)
+# DB helpers
+def get_conn():
+    return sqlite3.connect(DB_PATH, check_same_thread=False)
 
-def get_available_tables(path=DB_PATH):
+def available_tables():
     try:
-        conn = get_db_connection(path)
-        tables = [row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table';")]
-        conn.close()
-        return tables
-    except Exception:
+        with get_conn() as conn:
+            return [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table';")]
+    except:
         return []
 
-def get_table_columns(table, path=DB_PATH):
-    conn = get_db_connection(path)
-    cols = [row[1] for row in conn.execute(f"PRAGMA table_info({table});")]
-    conn.close()
-    return cols
+def cols_for(table):
+    with get_conn() as conn:
+        return [r[1] for r in conn.execute(f"PRAGMA table_info({table});")]
 
-def execute_query(query, conn, params=()):
-    df = pd.read_sql_query(query, conn, params=params)
-    return df
+def execute_query(query, params=()):
+    with get_conn() as conn:
+        return pd.read_sql_query(query, conn, params=params)
 
 # Main application
-
 def main():
     st.title("📊 Indovinya Comex Dashboard")
-    choice = st.sidebar.radio("Menu", ["Visão Geral", "Busca CNPJ", "Análise", "Dashboard", "Consulta", "Exportar"])
-    tables = get_available_tables()
+    menu = ["Visão Geral", "Importações", "Enriquecida", "Busca CNPJ", "Dashboard", "Consulta", "Exportar"]
+    choice = st.sidebar.radio("Menu", menu)
+    tables = available_tables()
     if choice != "Visão Geral" and not tables:
-        st.error("Nenhuma tabela no banco. Carregue arquivos em Visão Geral.")
+        st.error("Nenhuma tabela carregada. Vá em Visão Geral para importar dados.")
         return
 
     if choice == "Visão Geral":
-        show_db_overview()
+        overview()
+    elif choice == "Importações":
+        analyze_import()
+    elif choice == "Enriquecida":
+        show_enriched()
     elif choice == "Busca CNPJ":
-        show_cnpj_search()
-    elif choice == "Análise":
-        show_import_analysis()
+        search_cnpj()
     elif choice == "Dashboard":
         show_dashboard()
     elif choice == "Consulta":
-        show_custom_query()
-    elif choice == "Exportar":
-        show_export()
-
-# 1. Visão Geral with continuous uploader
-
-def show_db_overview():
-    st.header("🗄️ Visão Geral do Banco")
-    st.write("Arquivo:", os.path.abspath(DB_PATH))
-    tables = get_available_tables()
-    if tables:
-        st.success(f"Tabelas ({len(tables)}): {tables}")
-        for tbl in tables:
-            with st.expander(f"Tabela: {tbl}"):
-                st.write(get_table_columns(tbl))
-        st.markdown("---")
-        st.info("Envie mais arquivos para adicionar tabelas:")
+        custom_query()
     else:
-        st.info("Nenhuma tabela encontrada. Envie arquivos abaixo:")
+        export_data()
 
-    uploaded = st.file_uploader(
-        "Arquivos CSV/JSON/HTML", type=['csv','json','html'], accept_multiple_files=True
-    )
+# 1. Visão Geral
+
+def overview():
+    st.header("🗄️ Visão Geral")
+    st.write("Banco:", os.path.abspath(DB_PATH))
+    tables = available_tables()
+    if tables:
+        st.write(f"Tabelas ({len(tables)}): {tables}")
+        for t in tables:
+            with st.expander(t):
+                st.write(cols_for(t))
+    else:
+        st.info("Nenhuma tabela. Envie CSV/JSON/HTML abaixo:")
+    uploaded = st.file_uploader("Arquivos (.csv .json .html)", type=['csv','json','html'], accept_multiple_files=True)
     if uploaded:
-        conn = sqlite3.connect(DB_PATH)
-        for file in uploaded:
-            name, ext = os.path.splitext(file.name)
+        conn = get_conn()
+        for f in uploaded:
+            name, ext = os.path.splitext(f.name)
             try:
-                if ext.lower() == '.csv':
-                    try:
-                        df = pd.read_csv(file, sep=';', engine='python', on_bad_lines='skip')
-                    except Exception:
-                        df = pd.read_csv(file, sep=',', engine='python', on_bad_lines='skip')
-                elif ext.lower() == '.json':
-                    df = pd.read_json(file, orient='records')
-                elif ext.lower() == '.html':
-                    df = pd.read_html(file)[0]
+                if ext == '.csv':
+                    df = pd.read_csv(f, engine='python', on_bad_lines='skip')
+                elif ext == '.json':
+                    df = pd.read_json(f, orient='records')
                 else:
-                    continue
+                    df = pd.read_html(f)[0]
                 df.to_sql(name, conn, if_exists='replace', index=False)
-                st.write(f"Tabela '{name}' criada/atualizada: {len(df)} linhas")
+                st.write(f"Tabela '{name}' carregada ({len(df)} linhas)")
             except Exception as e:
-                st.error(f"Erro ao processar {file.name}: {e}")
+                st.error(f"Erro ao processar {f.name}: {e}")
         conn.close()
-        st.success("Reconstrução concluída. Recarregue a página para visualizar as tabelas.")
+        st.success("Dados importados. Recarregue para visualizar.")
 
-# 2. Busca por CNPJ
+# 2. Importações
 
-def show_cnpj_search():
-    st.header("🔍 Busca por CNPJ")
-    cnpj = st.text_input("Digite o CNPJ (apenas números):")
+def analyze_import():
+    st.header("📈 Análise de Importações")
+    if IMPORT_TABLE not in available_tables():
+        st.error(f"Tabela '{IMPORT_TABLE}' não encontrada.")
+        return
+    # filtros
+    df = execute_query(f"SELECT DISTINCT ANO_MES FROM {IMPORT_TABLE};")
+    ano = st.selectbox("ANO_MES", sorted(df['ANO_MES']))
+    df_year = execute_query(f"SELECT * FROM {IMPORT_TABLE} WHERE ANO_MES = ?;", params=(ano,))
+    numeric = [c for c in df_year.columns if pd.api.types.is_numeric_dtype(df_year[c])]
+    sel = st.multiselect("Métricas", numeric, default=numeric[:3])
+    if sel:
+        for c in sel:
+            fig = px.line(df_year, x='MES', y=c, title=f"{c} por mês ({ano})")
+            st.plotly_chart(fig, use_container_width=True)
+
+# 3. Enriquecida
+
+def show_enriched():
+    st.header("🔍 Dados Enriquecidos")
+    if ENRICH_TABLE not in available_tables():
+        st.error(f"Tabela '{ENRICH_TABLE}' não encontrada.")
+        return
+    df = execute_query(f"SELECT * FROM {ENRICH_TABLE} LIMIT 100;")
+    st.dataframe(df)
+    if st.checkbox("Mostrar estatísticas", False):
+        st.write(df.describe(include='all'))
+
+# 4. Busca por CNPJ
+
+def search_cnpj():
+    st.header("🔎 Busca por CNPJ")
+    cnpj = st.text_input("CNPJ (8 dígitos):")
     if not cnpj:
         return
-    conn = get_db_connection()
-    query = (
-        "SELECT e.*, est.* FROM Empresas e "
-        "LEFT JOIN Estabelecimentos est ON e.cnpj_basico = est.cnpj_basico "
-        "WHERE e.cnpj_basico = ?"
-    )
-    df = execute_query(query, conn, params=(cnpj[:8],))
-    conn.close()
-    if df.empty:
-        st.error("CNPJ não encontrado.")
-    else:
-        st.success(f"Empresa: {df['razao_social'].iloc[0]}")
-        col1, col2 = st.columns(2)
-        with col1:
-            st.write(f"**CNPJ:** {cnpj}")
-            st.write(f"**Capital Social:** R$ {df['capital_social'].iloc[0]:,.2f}")
-        with col2:
-            st.write(f"**Endereço:** {df['logradouro'].iloc[0]}, {df['numero'].iloc[0]}")
-            st.write(f"**Cidade/UF:** {df['municipio'].iloc[0]}/{df['uf'].iloc[0]}")
-
-# 3. Análise de Importações
-
-def show_import_analysis():
-    st.header("📈 Análise de Importações")
-    conn = get_db_connection()
-    anos = pd.read_sql_query("SELECT DISTINCT CO_ANO FROM Importacao;", conn)['CO_ANO']
-    ufs = pd.read_sql_query("SELECT DISTINCT SG_UF FROM Importacao;", conn)['SG_UF']
-    conn.close()
-    ano = st.selectbox("Ano", sorted(anos))
-    uf = st.selectbox("UF", sorted(ufs))
-    cols = get_table_columns('Importacao')
-    default = [c for c in ['VL_FOB','KG_LIQUIDO','QT_ESTAT'] if c in cols]
-    sel = st.multiselect("Colunas", cols, default=default)
-    if sel:
-        conn = get_db_connection()
-        df = pd.read_sql_query(
-            f"SELECT CO_MES, {', '.join(sel)} FROM Importacao WHERE CO_ANO=? AND SG_UF=?;", conn,
-            params=(ano, uf)
-        )
-        conn.close()
+    if ENRICH_TABLE in available_tables():
+        df = execute_query(f"SELECT * FROM {ENRICH_TABLE} WHERE PROVAVEL_IMPORTADOR_CNPJ LIKE ?;", params=(f"%{cnpj}%",))
         if df.empty:
-            st.warning("Sem dados para esses filtros.")
+            st.error("CNPJ não encontrado na tabela enriquecida.")
         else:
-            for c in sel:
-                st.plotly_chart(px.line(df, x='CO_MES', y=c, title=f"{c} por mês"))
+            st.dataframe(df)
+    else:
+        st.error("Tabela enriquecida não disponível.")
 
-# 4. Dashboard Geral
+# 5. Dashboard
 
 def show_dashboard():
-    st.header("📊 Dashboard")
-    conn = get_db_connection()
-    cols = get_table_columns('Importacao')
-    conn.close()
-    default = [c for c in ['VL_FOB','KG_LIQUIDO'] if c in cols]
-    sel = st.multiselect("Colunas", cols, default=default)
-    if sel:
-        conn = get_db_connection()
-        expr = ", ".join([f"SUM({c}) as {c}" for c in sel])
-        df_est = pd.read_sql_query(f"SELECT SG_UF, {expr} FROM Importacao GROUP BY SG_UF ORDER BY {sel[0]} DESC LIMIT 5;", conn)
-        df_mes = pd.read_sql_query(f"SELECT CO_MES, {expr} FROM Importacao GROUP BY CO_MES ORDER BY CO_MES;", conn)
-        conn.close()
-        for c in sel:
-            st.plotly_chart(px.bar(df_est, x='SG_UF', y=c, title=f"Top 5 Estados por {c}"))
-            st.plotly_chart(px.line(df_mes, x='CO_MES', y=c, title=f"{c} por mês"))
+    st.header("📊 Dashboard Geral")
+    if IMPORT_TABLE not in available_tables():
+        st.error(f"Tabela '{IMPORT_TABLE}' não disponível.")
+        return
+    df = execute_query(f"SELECT SG_UF AS UF, SUM(VALOR_FOB_ESTIMADO_TOTAL) AS TotalFOB FROM {IMPORT_TABLE} GROUP BY SG_UF;")
+    st.bar_chart(df.set_index('UF'))
 
-# 5. Consulta Personalizada
+# 6. Consulta SQL
 
-def show_custom_query():
-    st.header("🔍 Consulta Personalizada")
+def custom_query():
+    st.header("🔧 Consulta Personalizada")
     q = st.text_area("Digite SQL:")
     if st.button("Executar") and q.strip():
-        conn = get_db_connection()
-        df = pd.read_sql_query(q, conn)
-        conn.close()
-        st.dataframe(df)
+        try:
+            df = execute_query(q)
+            st.dataframe(df)
+        except Exception as e:
+            st.error(f"Erro na consulta: {e}")
 
-# 6. Exportar Dados
+# 7. Exportar
 
-def show_export():
+def export_data():
     st.header("📤 Exportar Dados")
-    tables = get_available_tables()
+    tables = available_tables()
     tbl = st.selectbox("Tabela", tables)
     if tbl:
-        conn = get_db_connection()
-        cols = get_table_columns(tbl)
-        df = pd.read_sql_query(f"SELECT * FROM {tbl};", conn)
-        conn.close()
-        st.dataframe(df)
+        df = execute_query(f"SELECT * FROM {tbl};")
+        st.download_button("Download CSV", df.to_csv(index=False), file_name=f"{tbl}.csv")
 
 if __name__ == '__main__':
     main()
