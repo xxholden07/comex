@@ -77,7 +77,12 @@ def show_db_overview():
         for file in uploaded:
             name, ext = os.path.splitext(file.name)
             try:
-                if ext.lower() == '.csv': df = pd.read_csv(file)
+                if ext.lower() == '.csv':
+                        # Tenta ler CSV com diferentes delimitadores e ignora linhas ruins
+                        try:
+                            df = pd.read_csv(file, sep=';', engine='python', on_bad_lines='skip')
+                        except Exception:
+                            df = pd.read_csv(file, sep=',', engine='python', on_bad_lines='skip')
                 elif ext.lower() == '.json': df = pd.read_json(file)
                 elif ext.lower() == '.html': df = pd.read_html(file)[0]
                 else: continue
