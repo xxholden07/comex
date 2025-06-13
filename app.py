@@ -23,10 +23,8 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-# Configure DB path and table names
+# Configure DB path
 DB_PATH = st.sidebar.text_input("Caminho para o SQLite DB", value="cnpj.db")
-IMPORT_TABLE = 'IMPORTACOES_TEST_FULL_202506131448'
-ENRICH_TABLE = 'Consulta_enriquecida'
 
 # DB helpers
 def get_conn():
@@ -39,161 +37,97 @@ def available_tables():
     except:
         return []
 
-def cols_for(table):
+def get_df(table, query=None, params=()):
     with get_conn() as conn:
-        return [r[1] for r in conn.execute(f"PRAGMA table_info({table});")]
-
-def execute_query(query, params=()):
-    with get_conn() as conn:
-        return pd.read_sql_query(query, conn, params=params)
+        if query:
+            return pd.read_sql_query(query, conn, params=params)
+        return pd.read_sql_query(f"SELECT * FROM {table};", conn)
 
 # Main application
 def main():
     st.title("📊 Indovinya Comex Dashboard")
-    menu = ["Visão Geral", "Importações", "Enriquecida", "Busca CNPJ", "Dashboard", "Consulta", "Exportar"]
+    menu = ["Visão Geral", "Métricas Dinâmicas", "Consulta", "Exportar"]
     choice = st.sidebar.radio("Menu", menu)
     tables = available_tables()
+
     if choice != "Visão Geral" and not tables:
         st.error("Nenhuma tabela carregada. Vá em Visão Geral para importar dados.")
         return
 
     if choice == "Visão Geral":
-        overview()
-    elif choice == "Importações":
-        analyze_import()
-    elif choice == "Enriquecida":
-        show_enriched()
-    elif choice == "Busca CNPJ":
-        search_cnpj()
-    elif choice == "Dashboard":
-        show_dashboard()
+        overview(tables)
+    elif choice == "Métricas Dinâmicas":
+        dynamic_metrics(tables)
     elif choice == "Consulta":
         custom_query()
     else:
-        export_data()
+        export_data(tables)
 
 # 1. Visão Geral
 
-def overview():
+def overview(tables):
     st.header("🗄️ Visão Geral")
     st.write("Banco:", os.path.abspath(DB_PATH))
-    tables = available_tables()
     if tables:
         st.write(f"Tabelas ({len(tables)}): {tables}")
         for t in tables:
             with st.expander(t):
-                st.write(cols_for(t))
+                cols = [r[1] for r in get_conn().execute(f"PRAGMA table_info({t});")]
+                st.write(cols)
     else:
         st.info("Nenhuma tabela. Envie CSV/JSON/HTML abaixo:")
-    uploaded = st.file_uploader("Arquivos (.csv .json .html)", type=['csv','json','html'], accept_multiple_files=True)
-    if uploaded:
-        conn = get_conn()
-        for f in uploaded:
-            name, ext = os.path.splitext(f.name)
-            try:
-                if ext == '.csv':
-                    df = pd.read_csv(f, engine='python', on_bad_lines='skip')
-                elif ext == '.json':
-                    df = pd.read_json(f, orient='records')
+        uploaded = st.file_uploader("Arquivos (.csv .json .html)", type=['csv','json','html'], accept_multiple_files=True)
+        if uploaded:
+            conn = get_conn()
+            for f in uploaded:
+                name, ext = os.path.splitext(f.name)
+                try:
+                    if ext == '.csv': df = pd.read_csv(f, engine='python', on_bad_lines='skip')
+                    elif ext == '.json': df = pd.read_json(f, orient='records')
+                    else: df = pd.read_html(f)[0]
+                    df.to_sql(name, conn, if_exists='replace', index=False)
+                    st.write(f"Tabela '{name}' carregada ({len(df)} linhas)")
+                except Exception as e:
+                    st.error(f"Erro em {f.name}: {e}")
+            conn.close()
+            st.success("Dados importados. Recarregue para visualizar.")
+
+# 2. Métricas Dinâmicas (ambas tabelas)
+
+def dynamic_metrics(tables):
+    st.header("📈 Métricas Dinâmicas")
+    table = st.selectbox("Selecione a tabela", tables)
+    if not table:
+        return
+    df = get_df(table)
+    # Select numeric columns
+    numeric = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
+    cols = st.multiselect("Selecione métricas", numeric, default=numeric[:3])
+    if cols:
+        # Group by selection dimension
+        dim = st.selectbox("Agrupar por", [None] + [c for c in df.columns if df[c].dtype == object])
+        if st.button("Atualizar gráficos"):
+            if dim:
+                for metric in cols:
+                    grouped = df.groupby(dim)[metric].sum().reset_index()
+                    fig = px.bar(grouped, x=dim, y=metric, title=f"{metric} por {dim}")
+                    st.plotly_chart(fig, use_container_width=True)
+            else:
+                # Time series if exists a date or month column
+                time_cols = [c for c in df.columns if 'MES' in c or 'MONTH' in c or 'DATA' in c.upper()]
+                if time_cols:
+                    time = st.selectbox("Eixo tempo (opcional)", [None] + time_cols)
+                    if time:
+                        for metric in cols:
+                            ts = df.groupby(time)[metric].sum().reset_index()
+                            fig = px.line(ts, x=time, y=metric, title=f"{metric} ao longo de {time}")
+                            st.plotly_chart(fig, use_container_width=True)
                 else:
-                    df = pd.read_html(f)[0]
-                df.to_sql(name, conn, if_exists='replace', index=False)
-                st.write(f"Tabela '{name}' carregada ({len(df)} linhas)")
-            except Exception as e:
-                st.error(f"Erro ao processar {f.name}: {e}")
-        conn.close()
-        st.success("Dados importados. Recarregue para visualizar.")
+                    st.info("Não há coluna temporal para séries.")
 
-# 2. Importações
+# 3. Consulta SQL
 
-def analyze_import():
-    st.header("📈 Análise de Importações")
-    if IMPORT_TABLE not in available_tables():
-        st.error(f"Tabela '{IMPORT_TABLE}' não encontrada.")
-        return
-    df = execute_query(f"SELECT DISTINCT ANO_MES FROM {IMPORT_TABLE};")
-    ano = st.selectbox("ANO_MES", sorted(df['ANO_MES']))
-    df_year = execute_query(f"SELECT * FROM {IMPORT_TABLE} WHERE ANO_MES = ?;", params=(ano,))
-    numeric = [c for c in df_year.columns if pd.api.types.is_numeric_dtype(df_year[c])]
-    sel = st.multiselect("Métricas", numeric, default=numeric[:3])
-    if sel:
-        for c in sel:
-            fig = px.line(df_year, x='MES', y=c, title=f"{c} por mês ({ano})")
-            st.plotly_chart(fig, use_container_width=True)
-
-# 3. Enriquecida
-
-def show_enriched():
-    st.header("🔍 Dados Enriquecidos")
-    if ENRICH_TABLE not in available_tables():
-        st.error(f"Tabela '{ENRICH_TABLE}' não encontrada.")
-        return
-    df = execute_query(f"SELECT * FROM {ENRICH_TABLE} LIMIT 100;")
-    st.dataframe(df)
-    if st.checkbox("Mostrar estatísticas", False):
-        st.write(df.describe(include='all'))
-
-# 4. Busca por CNPJ
-
-def search_cnpj():
-    st.header("🔎 Busca por CNPJ")
-    cnpj = st.text_input("CNPJ (8 dígitos):")
-    if not cnpj:
-        return
-    if ENRICH_TABLE in available_tables():
-        df = execute_query(f"SELECT * FROM {ENRICH_TABLE} WHERE PROVAVEL_IMPORTADOR_CNPJ LIKE ?;", params=(f"%{cnpj}%",))
-        if df.empty:
-            st.error("CNPJ não encontrado na tabela enriquecida.")
-        else:
-            st.dataframe(df)
-    else:
-        st.error("Tabela enriquecida não disponível.")
-
-# 5. Dashboard
-
-def show_dashboard():
-    st.header("📊 Dashboard Geral")
-    if IMPORT_TABLE not in available_tables():
-        st.error(f"Tabela '{IMPORT_TABLE}' não disponível.")
-        return
-    # Seleção de métricas numéricas disponíveis
-    # Buscamos colunas numéricas dinamicamente
-    sample_df = execute_query(f"SELECT * FROM {IMPORT_TABLE} LIMIT 1;")
-    numeric_cols = [c for c in sample_df.columns if pd.api.types.is_numeric_dtype(sample_df[c])]
-    default = [c for c in ["VALOR_FOB_ESTIMADO_TOTAL", "PESO_LIQUIDO"] if c in numeric_cols]
-    metrics = st.multiselect("Selecione métricas para análise:", numeric_cols, default=default)
-    if metrics:
-        with get_conn() as conn:
-            # Top 5 estados por métrica
-            for metric in metrics:
-                df_est = pd.read_sql_query(
-                    f"SELECT UF_IMPORTADOR AS UF, SUM({metric}) AS value FROM {IMPORT_TABLE} GROUP BY UF_IMPORTADOR ORDER BY value DESC LIMIT 5;",
-                    conn
-                )
-                fig_est = px.bar(
-                    df_est,
-                    x='UF',
-                    y='value',
-                    title=f"Top 5 Estados por {metric}",
-                    labels={'value': metric}
-                )
-                st.plotly_chart(fig_est, use_container_width=True)
-            # Distribuição mensal por métrica
-            for metric in metrics:
-                df_mes = pd.read_sql_query(
-                    f"SELECT MES, SUM({metric}) AS value FROM {IMPORT_TABLE} GROUP BY MES ORDER BY MES;",
-                    conn
-                )
-                fig_mes = px.line(
-                    df_mes,
-                    x='MES',
-                    y='value',
-                    title=f"Distribuição de {metric} por mês",
-                    labels={'value': metric}
-                )
-                st.plotly_chart(fig_mes, use_container_width=True)
-
-# 6. Consulta SQL():
+def custom_query():
     st.header("🔧 Consulta Personalizada")
     q = st.text_area("Digite SQL:")
     if st.button("Executar") and q.strip():
@@ -203,14 +137,13 @@ def show_dashboard():
         except Exception as e:
             st.error(f"Erro na consulta: {e}")
 
-# 7. Exportar
+# 4. Exportar
 
-def export_data():
+def export_data(tables):
     st.header("📤 Exportar Dados")
-    tables = available_tables()
     tbl = st.selectbox("Tabela", tables)
     if tbl:
-        df = execute_query(f"SELECT * FROM {tbl};")
+        df = get_df(tbl)
         st.download_button("Download CSV", df.to_csv(index=False), file_name=f"{tbl}.csv")
 
 if __name__ == '__main__':
