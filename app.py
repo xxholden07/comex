@@ -23,7 +23,7 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-# Configure DB path
+# Configure DB path and table names
 DB_PATH = st.sidebar.text_input("Caminho para o SQLite DB", value="cnpj.db")
 IMPORT_TABLE = 'IMPORTACOES_TEST_FULL_202506131448'
 ENRICH_TABLE = 'Consulta_enriquecida'
@@ -111,7 +111,6 @@ def analyze_import():
     if IMPORT_TABLE not in available_tables():
         st.error(f"Tabela '{IMPORT_TABLE}' não encontrada.")
         return
-    # filtros
     df = execute_query(f"SELECT DISTINCT ANO_MES FROM {IMPORT_TABLE};")
     ano = st.selectbox("ANO_MES", sorted(df['ANO_MES']))
     df_year = execute_query(f"SELECT * FROM {IMPORT_TABLE} WHERE ANO_MES = ?;", params=(ano,))
@@ -157,7 +156,9 @@ def show_dashboard():
     if IMPORT_TABLE not in available_tables():
         st.error(f"Tabela '{IMPORT_TABLE}' não disponível.")
         return
-    df = execute_query(f"SELECT SG_UF AS UF, SUM(VALOR_FOB_ESTIMADO_TOTAL) AS TotalFOB FROM {IMPORT_TABLE} GROUP BY SG_UF;")
+    df = execute_query(
+        f"SELECT UF_IMPORTADOR AS UF, SUM(VALOR_FOB_ESTIMADO_TOTAL) AS TotalFOB FROM {IMPORT_TABLE} GROUP BY UF_IMPORTADOR;"
+    )
     st.bar_chart(df.set_index('UF'))
 
 # 6. Consulta SQL
