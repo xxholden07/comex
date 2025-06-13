@@ -4,11 +4,21 @@ import pandas as pd
 import plotly.express as px
 import os
 
-# To handle large database file with Git LFS:
-# 1. Install Git LFS: https://git-lfs.github.com/ and run `git lfs install`
-# 2. Track the DB file: `git lfs track "cnpj.db"`
-# 3. Commit the .gitattributes file and the DB: `git add .gitattributes cnpj.db && git commit -m "Track cnpj.db with Git LFS"`
-# 4. Push to remote: `git push` (the LFS file will be uploaded separately)
+# Git LFS Setup Instructions:
+# 1. Inicialize o repositório Git (se ainda não estiver):
+#    git init
+#    git remote add origin https://github.com/xxholden07/comex.git
+# 2. Instale e habilite o Git LFS:
+#    git lfs install
+# 3. Adicione o arquivo cnpj.db ao LFS:
+#    git lfs track "cnpj.db"
+#    git add .gitattributes cnpj.db
+#    git commit -m "Track cnpj.db with Git LFS"
+# 4. Verifique o remote:
+#    git remote -v
+#    (Se precisar alterar: git remote set-url origin https://github.com/xxholden07/comex.git)
+# 5. Faça push para a branch principal:
+#    git push -u origin master  # ou main, conforme sua branch padrão
 
 # Page config must be first
 st.set_page_config(
@@ -79,7 +89,7 @@ def main():
     else:
         show_export()
 
-# 1. DB Overview with multi-file uploader
+# 1. DB Overview with multi-file uploader or CSV uploader
 
 def show_db_overview():
     st.header("🗄️ Visão Geral do Banco de Dados")
@@ -92,21 +102,36 @@ def show_db_overview():
             with st.expander(f"Colunas de {tbl}"):
                 st.write(get_table_columns(tbl))
     else:
-        st.info("Nenhuma tabela encontrada em '" + DB_PATH + "'.")
-        uploaded = st.file_uploader(
-            "Envie o banco SQLite em múltiplos arquivos (chunk_*.db)",
-            type=['db'], accept_multiple_files=True
+        st.info(f"Nenhuma tabela encontrada em '{DB_PATH}'.")
+        st.markdown("**Reconstrua o banco a partir de seus arquivos de exportação:**")
+        # JSON and HTML uploader
+        uploaded_files = st.file_uploader(
+            "Envie arquivos JSON, HTML ou CSV para reconstruir o banco SQLite", 
+            type=['csv','json','html'], accept_multiple_files=True
         )
-        if uploaded:
-            # Sort by file name to reconstruct order
-            uploaded_sorted = sorted(uploaded, key=lambda x: x.name)
-            # Write first chunk
-            with open(DB_PATH, 'wb') as f:
-                for idx, file in enumerate(uploaded_sorted):
-                    data = file.read()
-                    f.write(data)
-            st.success("Banco reconstruído com sucesso! Recarregue a página para visualizar tabelas.")
-
+        if uploaded_files:
+            conn = sqlite3.connect(DB_PATH)
+            for file in uploaded_files:
+                name, ext = os.path.splitext(file.name)
+                try:
+                    if ext.lower() == '.csv':
+                        df = pd.read_csv(file, sep=';') if ';' in file.getvalue().decode('utf-8', errors='ignore') else pd.read_csv(file)
+                    elif ext.lower() == '.json':
+                        df = pd.read_json(file, orient='records')
+                    elif ext.lower() == '.html':
+                        tables_html = pd.read_html(file)
+                        df = tables_html[0] if tables_html else pd.DataFrame()
+                    else:
+                        st.warning(f"Formato não suportado: {file.name}")
+                        continue
+                    df.to_sql(name, conn, if_exists='replace', index=False)
+                    st.write(f"Tabela '{name}' criada com {len(df)} linhas.")
+                except Exception as e:
+                    st.error(f"Erro ao processar {file.name}: {e}")
+            conn.close()
+            st.success("Banco reconstruído com sucesso! Recarregue a página para visualizar as tabelas.")
+        else:
+            st.warning("Envie pelo menos um arquivo JSON ou HTML de exportação para reconstruir.")
 # 2. Busca por CNPJ
 
 def show_cnpj_search():
@@ -208,18 +233,31 @@ def show_export():
     if tbl:
         cols = get_table_columns(tbl)
         sel = st.multiselect("Colunas", cols, default=cols[:5])
+        # Build query
         q = f"SELECT {', '.join(sel)} FROM {tbl}"
-        if filters := st.multiselect("Filtros", sel):
-            clauses=[]
-            for f in filters:
-                v=st.text_input(f"Valor para {f}")
-                if v: clauses.append(f"{f} LIKE '%{v}%'" )
-            if clauses: q+= " WHERE " + " AND ".join(clauses)
+        # Filters
+        filter_cols = st.multiselect("Filtros", sel)
+        clauses = []
+        for f in filter_cols:
+            v = st.text_input(f"Valor para {f}")
+            if v:
+                clauses.append(f"{f} LIKE '%{v}%'")
+        if clauses:
+            q += " WHERE " + " AND ".join(clauses)
+        # Execute
         conn = get_db_connection()
         df = pd.read_sql_query(q, conn)
         conn.close()
+        # Show and downloads
         st.dataframe(df)
-        st.download_button("CSV", df.to_csv(index=False), file_name=f"{tbl}.csv")
+        csv_data = df.to_csv(index=False)
+        st.download_button("📥 Download CSV", csv_data, file_name=f"{tbl}.csv", mime="text/csv")
+        # JSON export
+        json_data = df.to_json(orient='records')
+        st.download_button("📥 Download JSON", json_data, file_name=f"{tbl}.json", mime="application/json")
+        # HTML export
+        html_data = df.to_html(index=False)
+        st.download_button("📥 Download HTML", html_data, file_name=f"{tbl}.html", mime="text/html")
 
 if __name__ == "__main__":
     main()
