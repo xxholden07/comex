@@ -2,10 +2,6 @@ import streamlit as st
 import sqlite3
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
-from datetime import datetime
-import numpy as np
-import io
 import os
 
 # Page config must be first
@@ -28,18 +24,21 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-# Database helpers
-def get_db_connection(): return sqlite3.connect('cnpj.db', check_same_thread=False)
+DB_PATH = 'cnpj.db'
 
-def get_available_tables():
-    conn = get_db_connection()
-    tables = [row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table';")]  # noqa
+# DB helpers
+def get_db_connection(path=DB_PATH):
+    return sqlite3.connect(path, check_same_thread=False)
+
+def get_available_tables(path=DB_PATH):
+    conn = get_db_connection(path)
+    tables = [row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table';")]
     conn.close()
     return tables
 
-def get_table_columns(table):
-    conn = get_db_connection()
-    cols = [row[1] for row in conn.execute(f"PRAGMA table_info({table});")]  # noqa
+def get_table_columns(table, path=DB_PATH):
+    conn = get_db_connection(path)
+    cols = [row[1] for row in conn.execute(f"PRAGMA table_info({table});")]
     conn.close()
     return cols
 
@@ -53,26 +52,37 @@ def main():
 
     if choice == "Visão Geral do Banco":
         show_db_overview()
-    elif choice == "Busca por CNPJ":
-        show_cnpj_search()
-    elif choice == "Análise de Importações":
-        show_import_analysis()
-    elif choice == "Dashboard":
-        show_dashboard()
-    elif choice == "Consulta Personalizada":
-        show_custom_query()
     else:
-        show_export()
+        # If other pages but no DB, prompt upload
+        tables = get_available_tables()
+        if not tables:
+            st.error("Nenhuma tabela encontrada. Faça upload do arquivo cnpj.db na Visão Geral do Banco.")
+            return
+        if choice == "Busca por CNPJ":
+            show_cnpj_search()
+        elif choice == "Análise de Importações":
+            show_import_analysis()
+        elif choice == "Dashboard":
+            show_dashboard()
+        elif choice == "Consulta Personalizada":
+            show_custom_query()
+        elif choice == "Exportação de Dados":
+            show_export()
 
 # 1. DB Overview
 
 def show_db_overview():
     st.header("🗄️ Visão Geral do Banco de Dados")
-    # show file
-    st.write("Arquivo:", os.path.join(os.getcwd(), 'cnpj.db'))
+    st.write("Arquivo:", os.path.abspath(DB_PATH))
     tables = get_available_tables()
     if not tables:
         st.error("Nenhuma tabela encontrada em cnpj.db.")
+        uploaded = st.file_uploader("Faça upload do arquivo SQLite (.db)", type=['db'])
+        if uploaded:
+            bytes_data = uploaded.read()
+            with open(DB_PATH, 'wb') as f:
+                f.write(bytes_data)
+            st.success("Arquivo carregado! Recarregue a página para atualizar.")
         return
     st.write(f"Tabelas disponíveis ({len(tables)}):", tables)
     for tbl in tables:
@@ -87,12 +97,10 @@ def show_cnpj_search():
     if not cnpj:
         return
     conn = get_db_connection()
-    query = (
-        "SELECT e.*, est.* FROM Empresas e "
-        "LEFT JOIN Estabelecimentos est ON e.cnpj_basico = est.cnpj_basico "
-        "WHERE e.cnpj_basico = ?"
+    df = pd.read_sql_query(
+        "SELECT e.*, est.* FROM Empresas e LEFT JOIN Estabelecimentos est ON e.cnpj_basico = est.cnpj_basico WHERE e.cnpj_basico = ?;",
+        conn, params=(cnpj[:8],)
     )
-    df = pd.read_sql_query(query, conn, params=(cnpj[:8],))
     conn.close()
     if df.empty:
         st.error("CNPJ não encontrado.")
@@ -132,8 +140,7 @@ def show_import_analysis():
             st.warning("Sem dados para esses filtros.")
         else:
             for c in sel:
-                fig = px.line(df, x='CO_MES', y=c, title=f"{c} por mês")
-                st.plotly_chart(fig)
+                st.plotly_chart(px.line(df, x='CO_MES', y=c, title=f"{c} por mês"))
             st.download_button("📥 CSV", df.to_csv(index=False), file_name=f"imp_{uf}_{ano}.csv")
 
 # 4. Dashboard
@@ -165,11 +172,11 @@ def show_custom_query():
     q = st.text_area("SQL:")
     if st.button("Executar"):
         if q.strip():
-            df, err = execute_query(q)
-            if err: st.error(err)
-            else:
-                st.dataframe(df)
-                st.download_button("CSV", df.to_csv(index=False), file_name="query.csv")
+            conn = get_db_connection()
+            df = pd.read_sql_query(q, conn)
+            conn.close()
+            st.dataframe(df)
+            st.download_button("CSV", df.to_csv(index=False), file_name="query.csv")
 
 # 6. Exportação
 def show_export():
@@ -184,13 +191,13 @@ def show_export():
             clauses=[]
             for f in filters:
                 v=st.text_input(f"Valor para {f}")
-                if v: clauses.append(f"{f} LIKE '%{v}%'")
+                if v: clauses.append(f"{f} LIKE '%{v}%'" )
             if clauses: q+= " WHERE " + " AND ".join(clauses)
-        df,err=execute_query(q)
-        if err: st.error(err)
-        else:
-            st.dataframe(df)
-            st.download_button("CSV", df.to_csv(index=False), file_name=f"{tbl}.csv")
+        conn = get_db_connection()
+        df = pd.read_sql_query(q, conn)
+        conn.close()
+        st.dataframe(df)
+        st.download_button("CSV", df.to_csv(index=False), file_name=f"{tbl}.csv")
 
-if __name__=="__main__":
+if __name__ == "__main__":
     main()
