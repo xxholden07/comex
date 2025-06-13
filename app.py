@@ -156,14 +156,44 @@ def show_dashboard():
     if IMPORT_TABLE not in available_tables():
         st.error(f"Tabela '{IMPORT_TABLE}' não disponível.")
         return
-    df = execute_query(
-        f"SELECT UF_IMPORTADOR AS UF, SUM(VALOR_FOB_ESTIMADO_TOTAL) AS TotalFOB FROM {IMPORT_TABLE} GROUP BY UF_IMPORTADOR;"
-    )
-    st.bar_chart(df.set_index('UF'))
+    # Seleção de métricas numéricas disponíveis
+    # Buscamos colunas numéricas dinamicamente
+    sample_df = execute_query(f"SELECT * FROM {IMPORT_TABLE} LIMIT 1;")
+    numeric_cols = [c for c in sample_df.columns if pd.api.types.is_numeric_dtype(sample_df[c])]
+    default = [c for c in ["VALOR_FOB_ESTIMADO_TOTAL", "PESO_LIQUIDO"] if c in numeric_cols]
+    metrics = st.multiselect("Selecione métricas para análise:", numeric_cols, default=default)
+    if metrics:
+        with get_conn() as conn:
+            # Top 5 estados por métrica
+            for metric in metrics:
+                df_est = pd.read_sql_query(
+                    f"SELECT UF_IMPORTADOR AS UF, SUM({metric}) AS value FROM {IMPORT_TABLE} GROUP BY UF_IMPORTADOR ORDER BY value DESC LIMIT 5;",
+                    conn
+                )
+                fig_est = px.bar(
+                    df_est,
+                    x='UF',
+                    y='value',
+                    title=f"Top 5 Estados por {metric}",
+                    labels={'value': metric}
+                )
+                st.plotly_chart(fig_est, use_container_width=True)
+            # Distribuição mensal por métrica
+            for metric in metrics:
+                df_mes = pd.read_sql_query(
+                    f"SELECT MES, SUM({metric}) AS value FROM {IMPORT_TABLE} GROUP BY MES ORDER BY MES;",
+                    conn
+                )
+                fig_mes = px.line(
+                    df_mes,
+                    x='MES',
+                    y='value',
+                    title=f"Distribuição de {metric} por mês",
+                    labels={'value': metric}
+                )
+                st.plotly_chart(fig_mes, use_container_width=True)
 
-# 6. Consulta SQL
-
-def custom_query():
+# 6. Consulta SQL():
     st.header("🔧 Consulta Personalizada")
     q = st.text_area("Digite SQL:")
     if st.button("Executar") and q.strip():
