@@ -6,6 +6,10 @@ import plotly.graph_objects as go
 from datetime import datetime
 import numpy as np
 import io
+import os
+st.write("Diretório atual:", os.getcwd())
+st.write("Arquivos aqui:", os.listdir())
+
 
 # Page config
 st.set_page_config(
