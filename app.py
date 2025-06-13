@@ -90,19 +90,17 @@ def download_csv(df):
 
 # Main app
 def main():
-    # Debug: show working directory and files
+    # Debug: show working directory, files, and available tables
     st.write("Diretório atual:", os.getcwd())
     st.write("Arquivos aqui:", os.listdir())
+    st.write("Tabelas disponíveis:", get_available_tables())
 
     st.title("📊 Sistema de Análise Comex - Indovinya")
-    
-    # Sidebar
     st.sidebar.title("Menu")
     page = st.sidebar.radio(
         "Selecione uma opção:",
         ["Busca por CNPJ", "Análise de Importações", "Dashboard", "Consulta Personalizada", "Exportação de Dados"]
     )
-    
     if page == "Busca por CNPJ":
         show_cnpj_search()
     elif page == "Análise de Importações":
@@ -142,10 +140,9 @@ def show_cnpj_search():
                 st.write(f"**Bairro:** {df['bairro'].iloc[0]}")
                 st.write(f"**Cidade/UF:** {df['municipio'].iloc[0]}/{df['uf'].iloc[0]}")
                 st.write(f"**CEP:** {df['cep'].iloc[0]}")
-            csv = download_csv(df)
             st.download_button(
                 label="📥 Download CSV",
-                data=csv,
+                data=download_csv(df),
                 file_name=f"empresa_{cnpj}.csv",
                 mime="text/csv"
             )
@@ -155,92 +152,65 @@ def show_cnpj_search():
 # 2. Análise de Importações
 def show_import_analysis():
     st.header("📈 Análise de Importações")
+    tables = get_available_tables()
+    if 'Importacao' not in tables:
+        st.error("Tabela 'Importacao' não encontrada no banco de dados.")
+        return
     conn = get_db_connection()
     col1, col2 = st.columns(2)
     with col1:
-        anos = pd.read_sql_query("SELECT DISTINCT CO_ANO FROM Importacao", conn)
-        ano = st.selectbox("Selecione o ano:", sorted(anos['CO_ANO'].tolist()))
+        anos_df = pd.read_sql_query("SELECT DISTINCT CO_ANO FROM Importacao", conn)
+        ano = st.selectbox("Selecione o ano:", sorted(anos_df['CO_ANO'].tolist()))
     with col2:
-        ufs = pd.read_sql_query("SELECT DISTINCT SG_UF FROM Importacao", conn)
-        uf = st.selectbox("Selecione a UF:", sorted(ufs['SG_UF'].tolist()))
+        ufs_df = pd.read_sql_query("SELECT DISTINCT SG_UF FROM Importacao", conn)
+        uf = st.selectbox("Selecione a UF:", sorted(ufs_df['SG_UF'].tolist()))
     available_columns = get_table_columns('Importacao')
-    # Ensure default columns exist
     default_cols = [c for c in ['VL_FOB', 'KG_LIQUIDO', 'QT_ESTAT'] if c in available_columns]
     selected_columns = st.multiselect(
-        "Selecione as colunas para análise:",
-        available_columns,
-        default=default_cols
+        "Selecione as colunas para análise:", available_columns, default=default_cols
     )
     if selected_columns:
-        cols_str = ", ".join(selected_columns)
-        query = (
-            f"SELECT CO_ANO, CO_MES, {cols_str} "
-            "FROM Importacao "
-            "WHERE CO_ANO = ? AND SG_UF = ?"
-        )
+        query = f"SELECT CO_ANO, CO_MES, {', '.join(selected_columns)} FROM Importacao WHERE CO_ANO = ? AND SG_UF = ?"
         df = pd.read_sql_query(query, conn, params=(ano, uf))
         conn.close()
-        if not df.empty:
+        if df.empty:
+            st.warning("Nenhum dado encontrado para os filtros selecionados.")
+        else:
             for col in selected_columns:
-                fig = px.line(
-                    df,
-                    x='CO_MES',
-                    y=col,
-                    title=f'{col} por Mês - {uf} ({ano})',
-                    labels={'CO_MES': 'Mês', col: col}
-                )
+                fig = px.line(df, x='CO_MES', y=col,
+                              title=f'{col} por Mês - {uf} ({ano})',
+                              labels={'CO_MES': 'Mês', col: col})
                 st.plotly_chart(fig, use_container_width=True)
-            csv = download_csv(df)
-            st.download_button(
-                label="📥 Download CSV",
-                data=csv,
-                file_name=f"importacoes_{uf}_{ano}.csv",
-                mime="text/csv"
-            )
+            st.download_button("📥 Download CSV", download_csv(df), file_name=f"importacoes_{uf}_{ano}.csv")
 
 # 3. Dashboard Geral
 def show_dashboard():
     st.header("📊 Dashboard Geral")
+    tables = get_available_tables()
+    if 'Importacao' not in tables:
+        st.error("Tabela 'Importacao' não encontrada no banco de dados.")
+        return
     conn = get_db_connection()
     available_columns = get_table_columns('Importacao')
-    # Ensure default columns exist
     default_dash = [c for c in ['VL_FOB', 'KG_LIQUIDO'] if c in available_columns]
     selected_columns = st.multiselect(
-        "Selecione as colunas para análise:",
-        available_columns,
-        default=default_dash
+        "Selecione as colunas para análise:", available_columns, default=default_dash
     )
     if selected_columns:
         cols_sum = ", ".join([f"SUM({col}) as {col}" for col in selected_columns])
-        query_est = (
-            f"SELECT SG_UF, {cols_sum} "
-            "FROM Importacao "
-            f"GROUP BY SG_UF ORDER BY SUM({selected_columns[0]}) DESC LIMIT 5"
-        )
-        df_est = pd.read_sql_query(query_est, conn)
-        for col in selected_columns:
-            fig_e = px.bar(
-                df_est,
-                x='SG_UF',
-                y=col,
-                title=f'Top 5 Estados por {col}',
-                labels={'SG_UF': 'Estado', col: col}
-            )
-            st.plotly_chart(fig_e, use_container_width=True)
-        query_mes = (
-            f"SELECT CO_MES, {cols_sum} "
-            "FROM Importacao GROUP BY CO_MES ORDER BY CO_MES"
-        )
-        df_mes = pd.read_sql_query(query_mes, conn)
+        df_est = pd.read_sql_query(
+            f"SELECT SG_UF, {cols_sum} FROM Importacao GROUP BY SG_UF ORDER BY SUM({selected_columns[0]}) DESC LIMIT 5",
+            conn)
+        df_mes = pd.read_sql_query(
+            f"SELECT CO_MES, {cols_sum} FROM Importacao GROUP BY CO_MES ORDER BY CO_MES",
+            conn)
         conn.close()
         for col in selected_columns:
-            fig_m = px.line(
-                df_mes,
-                x='CO_MES',
-                y=col,
-                title=f'Distribuição de {col} por Mês',
-                labels={'CO_MES': 'Mês', col: col}
-            )
+            fig_e = px.bar(df_est, x='SG_UF', y=col,
+                           title=f'Top 5 Estados por {col}', labels={'SG_UF': 'Estado', col: col})
+            st.plotly_chart(fig_e, use_container_width=True)
+            fig_m = px.line(df_mes, x='CO_MES', y=col,
+                           title=f'Distribuição de {col} por Mês', labels={'CO_MES': 'Mês', col: col})
             st.plotly_chart(fig_m, use_container_width=True)
         st.download_button("📥 Download Top 5 Estados", download_csv(df_est), file_name="top5_estados.csv")
         st.download_button("📥 Download Distribuição Mensal", download_csv(df_mes), file_name="distribuicao_mensal.csv")
@@ -250,15 +220,14 @@ def show_custom_query():
     st.header("🔍 Consulta Personalizada")
     query = st.text_area("Digite sua consulta SQL:", height=150)
     if st.button("Executar Consulta"):
-        if query:
-            df, error = execute_query(query)
-            if error:
-                st.error(f"Erro na consulta: {error}")
-            else:
-                st.success(f"Consulta executada com sucesso! {len(df)} linhas encontradas.")
-                st.dataframe(df)
-                if not df.empty:
-                    st.download_button("📥 Download CSV", download_csv(df), file_name="consulta_resultado.csv")
+        df, error = execute_query(query)
+        if error:
+            st.error(f"Erro na consulta: {error}")
+        else:
+            st.success(f"Consulta executada com sucesso! {len(df)} linhas encontradas.")
+            st.dataframe(df)
+            if not df.empty:
+                st.download_button("📥 Download CSV", download_csv(df), file_name="consulta_resultado.csv")
 
 # 5. Exportação de Dados
 def show_export():
@@ -270,24 +239,22 @@ def show_export():
         default_exp = columns[:5] if len(columns) >= 5 else columns
         selected_columns = st.multiselect("Selecione as colunas:", columns, default=default_exp)
         if selected_columns:
-            cols_str = ", ".join(selected_columns)
-            query = f"SELECT {cols_str} FROM {selected_table}"
+            query = f"SELECT {', '.join(selected_columns)} FROM {selected_table}"
             st.subheader("Filtros")
             filters = []
             for col in st.multiselect("Selecione colunas para filtrar:", selected_columns):
                 val = st.text_input(f"Valor para {col}:")
                 if val:
-                    filters.append(f"{col} LIKE '%{val}%'" )
+                    filters.append(f"{col} LIKE '%{val}%'")
             if filters:
                 query += " WHERE " + " AND ".join(filters)
-            if st.button("Exportar Dados"):
-                df, error = execute_query(query)
-                if error:
-                    st.error(f"Erro na consulta: {error}")
-                else:
-                    st.success(f"Dados exportados com sucesso! {len(df)} linhas encontradas.")
-                    st.dataframe(df)
-                    st.download_button("📥 Download CSV", download_csv(df), file_name=f"{selected_table}_export.csv")
+            df, error = execute_query(query)
+            if error:
+                st.error(f"Erro na consulta: {error}")
+            else:
+                st.success(f"Dados exportados com sucesso! {len(df)} linhas encontradas.")
+                st.dataframe(df)
+                st.download_button("📥 Download CSV", download_csv(df), file_name=f"{selected_table}_export.csv")
 
 if __name__ == "__main__":
     main()
